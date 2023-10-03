@@ -1,0 +1,1073 @@
+---
+title: "LCR Assignment 2"
+output:
+  html_document: default
+  pdf_document: default
+date: "2023-03-10"
+bibliography: library.bib
+biblio-style: apa
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# Loading libaries
+library(tidyverse)
+library(ggplot2)
+library(caret)
+library(ggpubr) 
+library(gridExtra)  
+library(broom)
+library(haven)
+library(here)
+library(glmnet)
+library(mosaic)
+library(Amelia)
+```
+
+# Question 1
+
+Here, I load in the Understanding Society: Longitudinal Teaching Dataset, Waves 1-9, 2009-2018 dataset. 
+```{r}
+# Loading dataset
+ltd_df <- read_dta(here::here("Data","longitudinal_td.dta"))
+```
+
+Looking at the unique values of `sclfsato`:
+```{r}
+unique(ltd_df$sclfsato)
+```
+
+I dichotomise `sclfsato` by constructing a new variable named `satisfied`, which takes a value of 1 if `sclfsato` has a value of 5 or above (somewhat satisfied, mostly satisfied, and completely satisfied). Other values of `sclfsato` are coded 0. 
+```{r}
+ltd_df$satisfied <- ifelse(ltd_df$sclfsato >= 5, 1, 0)
+```
+
+Looking at the values of `satisfied`:
+```{r}
+table(ltd_df$satisfied)
+```
+
+Next I subset values only from waves 1-3, and include only certain variables of interest which I derive from earlier literature. In my analysis, one focus pertains to an individual's labour participation. Studies have typically suggested work and employment to serve various psychological needs linked to satisfaction. For instance, @jahoda_82 and @warr_87 suggest that employment serve five psychological functions -- time structure; social contacts;  participation for collective purposes; status; and regular activity -- that contribute to one's overall well-being. Unemployment, in contrast, are associated with the loss of self-esteem and increasing stress [@clark_94]. Taking the perspective of agency theory, unemployment also result in a sense of control over one's life situation [@fryer_86]. Indeed, recent literature find employment-related factors to be robust predictors of life satisfaction. Employed individuals in particular have consistently been found to be more satisfied with their lives compared to unemployed people [@layard_05]. Compared to full-time employment, part-time work has also been found to lower life satisfaction levels especially for males, while unemployment is negatively associated with satisfaction levels regardless of gender or income [@brereton_08]. In view of employment effects on life satisfaction, I include employment status (measured by `jbstat`)  as part of my subsequent analysis, and will be further engineered to reflect if an individual is in paid or unpaid work. An additional category will be specified to identify if an individual is presently in 'training', such as those in education.
+```{r}
+unique(ltd_df$jbstat)
+```
+
+
+
+Besides one's employment status, life satisfaction is also found to be affected directly by personal income levels [@diener_99; @ferrer-i-carbonell_05; @mcfall_11]. This is explained in part by the basic needs hypothesis, in which having an income helps to satisfy one's material needs. Furthermore, income mobility is also found to have an influence on life satisfaction [@wolbring_13], in which downward mobility (income loss) exerts a stronger impact on life satisfaction compared to upward mobility (income gain). This is in line with the concept of loss aversion where individuals perceive losses to be significantly less desirable than gains. Of close relevance to income is also the notion of social class, which @kaiser_21 find to be positively associated with life satisfaction. In this analysis, I operationalise class in a neo-Weberian perspective, which is best represented in Goldthorpe's NS-SEC class schema (measured by `jbnssec8_dv`). More specifically, class here is considered in terms of *employment relations* which determine their life chances at securing certain social outcomes.
+```{r}
+unique(ltd_df$jbnssec8_dv)
+```
+This will be further engineered to reflect 4 main classes. Upper classes, such as professionals and higher management staff, are characterised by relatively favourable employment relations given the difficulty and high cost of replacing such highly skilled workers [@breen_09]. In contrast, lower working classes are constituted by workers in lower skilled routine and semi-routine jobs. A middle-class exists between the upper and lower classes, which consists of workers who enjoy better life chances than working class employees, but not to the extent experienced by the upper classes. These employees are typically those in lower supervisory roles which possess some degree of autonomy within the firm, but who otherwise possess little control over their life chances. One final class which exists alongside the middle-class pertains to the petty bourgeois, largely characterised by their ownership of small businesses. Like the middle-class, the petty bourgeois also enjoy some degree of autonomy, but have lesser control over life chances compared to the upper classes. To predict life satisfaction, I consider variables relating to one's destination class and one's class mobility across waves. Specifically, class mobility will be taken as the difference between one's destination class at time $t$, and at time $t-1$.
+
+
+Apart from personal income and class factors, @wolbring_13 also find household factors  to be relevant for life satisfaction. In particular, marital status (`mstat_dv`) and income with respect of partnerships and unions are found to have positive effects on life satisfaction as well. Relevant to my analysis then is a measure of household income (`fihhmngrs_dv`), standardised by the modified OECD equivalence scale (`ieqmoecd_dv_dv`) to account for differences in household size and composition. In addition to household income, household size (`hhsize_dv`) and the number of children within a household (`nchild_dv`) is also found to be negatively associated with satisfaction levels [@powdthavee_08]. 
+
+
+Finally, self-rated physical and mental health factors are found to be consistently negatively associated with well-being [@guney_10; @lacruz_11; @gana_13]. Primarily, individuals having poor self-rated physical and mental health demonstrated a tendency towards a chance/external locus of control --that is, a belief that outcomes are determined by factors beyond their control-- which are in turn associated with lower levels of life satisfaction. For physical health, I include the SF12 Physical Health Component Survey (`sf12pcs_dv`) and one's BMI (`bmi_dv`). To measure their mental health, I include the SF12 Mental Health Component Survey (`sf12mcs_dv`); the Short Warwick-Edinburgh Mental Well-being Scale (`swemwbs_dv`); and self-rated subjective wellbeing (`scghq2_dv`). As higher scores on these scales indicate poorer physical/mental health, I will also reverse code it, such that higher scores reflect better health. 
+
+Furthermore, because satisfaction is also influenced by comparisons with people of similar demographic backgrounds, I institute controls for sex (`sex_dv`), age (`age_dv`), education (`hiqual_dv`), and migrant status (`bornuk_dv`).  Sex will be dichotomised according to whether one is male or not; education will be classified according to pre-tertiary, pre-university, and university education. Migrant status will be dichotomised according to whether they are UK-born or not. 
+
+I therefore create a dataframe with these relevant variables. 
+```{r}
+# Selecting relevant variables 
+ltd_subset <- ltd_df %>% 
+  filter(wave %in% 1:3) %>% # Subsetting only waves 1-3 
+  select(pidp,wave,hidp,age_dv,sex_dv,ethn_dv,bornuk_dv,
+         sf1_dv,bmi_dv,sf12pcs_dv,sf12mcs_dv,scghq2_dv,swemwbs_dv,satisfied,
+         jbstat,fimngrs_dv,fihhmngrs_dv,ieqmoecd_dv, jbnssec8_dv,
+         hhsize_dv,mstat_dv,nchild_dv, hiqual_dv)
+```
+
+I transform my variables accordingly.
+```{r}
+# Transforming and recoding variables
+ltd_subset <- ltd_subset %>%
+  
+  # Sex -- dichotomising if one is male or not 
+  mutate(male = ifelse(sex_dv == 1, 1,0)) %>%
+  select(-sex_dv) %>%
+  
+  # Education -- increasing values represent greater degree of education (3 = higher education; 2 = pre-uni; 1 = pre-tertiary)
+  mutate(edu = ifelse(hiqual_dv %in% c(1,2), 3,
+                            ifelse(hiqual_dv %in% c(3,4),2,1))) %>%
+  select(-hiqual_dv) %>%
+  
+  # Ethnicity
+  mutate(ethn = ifelse(ethn_dv %in% 1:4, 0,
+                       ifelse(ethn_dv %in% 5:8, 4,
+                              ifelse(ethn_dv %in% 9:13, 3,
+                                     ifelse(ethn_dv %in% 14:16, 2,
+                                            ifelse(ethn_dv == 17, 1, NA)))))) %>%
+  mutate(ethn = factor(ethn,
+                 levels = c(0,1,2,3,4),
+                 labels = c("white", "arab", "black", "asian", "mixed"))) %>%
+  select(-ethn_dv) %>%
+  
+  # Migrant status -- dichotomising if one is migrant (non-UK born) or not
+  mutate(migrant = ifelse(bornuk_dv == 2, 1,0)) %>%
+  select(-bornuk_dv) %>%
+  
+  # Health factors -- inversed scale where greater scores means better health
+  mutate(gen_health = 6-sf1_dv) %>% # general health
+  select(-sf1_dv) %>%
+  
+  mutate(sub_wellbeing = 13-scghq2_dv) %>% # subjective well-being
+  select(-scghq2_dv) %>%
+  
+  # Employment status -- categorising based on whether the roles are paid, unpaid, or still under training 
+  mutate(emp_status = ifelse(jbstat == 97, NA, 
+                           ifelse(jbstat %in% c(3,4,6, 8,10), 1, 
+                           ifelse(jbstat %in% c(7, 9, 11), 2, 3)))) %>%
+  mutate(emp_status = factor(emp_status,
+                      levels = c(1,2,3),
+                      labels = c("unpaid", "training", "paid"))) %>%
+  select(-jbstat) %>%
+
+  # Personal Income -- measured in terms of deciles 
+  mutate(inc = ifelse(fimngrs_dv < 0, NA, fimngrs_dv)) %>%
+  mutate(incDec = ntile(inc, 10)) %>%
+  select(-fimngrs_dv,-inc) %>%
+  
+  # Household income -- standardised by OECD equivalence scale, and measured in terms of decile
+  mutate(inc_hh = ifelse(fihhmngrs_dv < 0, NA, fihhmngrs_dv)) %>%
+  mutate(inc_hh = inc_hh/ieqmoecd_dv) %>%
+  mutate(hh_incDec = ntile(inc_hh, 10)) %>%
+  select(-c(ieqmoecd_dv,fihhmngrs_dv, inc_hh)) %>%
+  
+  # Class -- higher values reflect upper classes
+  mutate(class = ifelse(is.na(jbnssec8_dv), 1, 
+                        ifelse(jbnssec8_dv %in% c(1,2), 4,
+                        ifelse(jbnssec8_dv %in% c(3,4,5), 3, 
+                        ifelse(jbnssec8_dv == 6, 2, 1))))) %>%
+  # In line with Goldthorpe, class 1 = manual class, class 2 = petty bourgeois, class 3 = intermediate, class 4 = service
+  select(-jbnssec8_dv) %>%
+  
+  # Family/Union status -- whether one is in a union or not 
+  mutate(union = ifelse(mstat_dv %in% c(2,5), 1, 0)) %>%
+  select(-mstat_dv)
+```
+
+
+Next, I impute missing values within the data, and store it inside the prepared_data dataframe
+```{r, warning=FALSE}
+# Setting seed for reproducibility
+set.seed(123)
+
+to_impute <- ltd_subset
+
+imputed <- amelia(data.frame(to_impute),
+                    noms = c("satisfied", "male", "migrant","union", "ethn", "emp_status"),
+                    ords = c("class", "edu"),
+                    idvars = c("pidp"),
+                    m = 1, boot.type = "none", p2s = 0)
+
+prepared_data <- imputed$imputations$imp1
+```
+
+Checking to see if there are still missing data.
+```{r}
+which(is.na(prepared_data))
+```
+
+
+Now that there are no more NA values, I create lagged values collected in the previous 2 waves.
+```{r}
+prepared_data_lagged <- prepared_data %>%
+  group_by(pidp) %>%
+   mutate(age_lagged2 = dplyr::lag(age_dv,1),
+          age_lagged1 = dplyr::lag(age_dv,2),
+         bmi_lagged2 = dplyr::lag(bmi_dv,1),
+         bmi_lagged1 = dplyr::lag(bmi_dv,2),
+         edu_lagged2 = dplyr::lag(edu,1),
+         edu_lagged1 = dplyr::lag(edu,2),
+         sf12mcs_lagged2 = dplyr::lag(sf12mcs_dv,1),
+         sf12mcs_lagged1 = dplyr::lag(sf12mcs_dv,2),
+         sf12pcs_lagged2 = dplyr::lag(sf12pcs_dv,1),
+         sf12pcs_lagged1 = dplyr::lag(sf12pcs_dv,2),
+         swemwbs_lagged = dplyr::lag(swemwbs_dv,2),
+         hhsize_lagged2 = dplyr::lag(hhsize_dv, 1),
+         hhsize_lagged1 = dplyr::lag(hhsize_dv, 2),
+         nchild_lagged2 = dplyr::lag(nchild_dv, 1),
+         nchild_lagged1 = dplyr::lag(nchild_dv, 2),
+         genhealth_lagged2 = dplyr::lag(gen_health, 1),
+         genhealth_lagged1 = dplyr::lag(gen_health, 2),
+         sub_wellbeing_lagged2 = dplyr::lag(sub_wellbeing, 1),
+         sub_wellbeing_lagged1 = dplyr::lag(sub_wellbeing, 2),
+         emp_status_lagged2 = dplyr::lag(emp_status, 1),
+         emp_status_lagged1 = dplyr::lag(emp_status, 2),
+         incDec_wave2 = dplyr::lag(incDec, 1),
+         incDec_wave1 = dplyr::lag(incDec, 2),
+         hh_incDec_wave2 = dplyr::lag(hh_incDec, 1),
+         hh_incDec_wave1 = dplyr::lag(hh_incDec, 2),
+         class_wave2 = dplyr::lag(class, 1),
+         class_wave1 = dplyr::lag(class, 2),
+         union_lagged = dplyr::lag(union, 1)) %>%
+  filter(wave == 3) %>%
+  ungroup() %>%
+  select(-age_dv, -bmi_dv, -sf12mcs_dv, -sf12pcs_dv, -swemwbs_dv, -hhsize_dv, -nchild_dv,
+         -gen_health, -sub_wellbeing, -emp_status, -class, -union, -incDec, -hh_incDec, -edu,
+         -pidp, -wave, -hidp) 
+```
+
+Before beginning, I engineer some variables to reflect one's personal and household income mobility, calculated by changes to one's income decile across waves. In line with WHO's standards, I also differentiate between individuals who are severely underweight, underweight, normal weight, overweight, and obese.  
+```{r}
+prepared_data_lagged <- prepared_data_lagged %>%
+ 
+  # Income mobility for individual and household
+  mutate(inc_mobility = incDec_wave2 - incDec_wave1,
+         hh_inc_mobility = hh_incDec_wave2 - hh_incDec_wave1,
+         class_mobility = class_wave2 - class_wave1) %>%
+  
+  # Weight class in wave 2
+  mutate(weight_class_lagged2 = ifelse(bmi_lagged2 >= 18.5 & bmi_lagged2 < 25, 0, 
+                               ifelse(bmi_lagged2 >=25 & bmi_lagged2 < 30, 3, 
+                               ifelse(bmi_lagged2 >=30, 4,
+                               ifelse(bmi_lagged2 >=16 & bmi_lagged2 < 18.5, 2, 1))))) %>%
+  mutate(weight_class_lagged2 = factor(weight_class_lagged2,
+                               levels = c(0,1,2,3,4),
+                               labels = c("normal", "severely underweight", "underweight", "overweight", "obese"))) %>%
+  
+  # Weight class in wave 1 
+  mutate(weight_class_lagged1 = ifelse(bmi_lagged1 >= 18.5 & bmi_lagged1 < 25, 0, 
+                               ifelse(bmi_lagged1 >=25 & bmi_lagged1 < 30, 3, 
+                               ifelse(bmi_lagged1 >=30, 4,
+                               ifelse(bmi_lagged1 >=16 & bmi_lagged1 < 18.5, 2, 1))))) %>%
+  mutate(weight_class_lagged1 = factor(weight_class_lagged1,
+                               levels = c(0,1,2,3,4),
+                               labels = c("normal", "severely underweight", "underweight", "overweight", "obese"))) %>%
+  
+  select(-c(incDec_wave1, hh_incDec_wave1, class_wave1, bmi_lagged2))
+```
+
+Looking at all the dataset to ensure that it includes all lagged and engineered variables:
+```{r}
+colnames(prepared_data_lagged)
+```
+Notice that all variables have data from the previous two waves except those which: 1) are only collected during wave 1 (i.e., `swemwbs_lagged`); 2) are engineered to reflect the difference between two waves (i.e., `inc_mobility`, `hh_inc_mobility`, `class_mobility`), or 3) are intentionally omitted to avoid collinearity. As to the final point, including *both* wave 1 and 2 data on income/class decile, as well as income/class mobility would result in collinearity. Hence only wave 2 data and mobility-related variables are included. This is in line with Wolbring et al. (2013). 
+
+
+Now that all the variables involved have been derived and transformed, I split the first half of the prepared data into the 'train' dataset and the second half into the 'test' dataset
+```{r}
+train <- prepared_data_lagged[1:floor(nrow(prepared_data_lagged)/2), ]
+test <- prepared_data_lagged[(floor(nrow(prepared_data_lagged)/2)+1):nrow(prepared_data_lagged), ]
+```
+
+### Health factors 
+
+Having now split the dataset into train and test, I begin by looking at health-related factors in predicting life satisfaction. I first build an initial LASSO linear model consisting of just lagged physical and mental health data.
+
+```{r}
+# Setting seed for reproducibility
+set.seed(123)
+
+# Setting up test and train for x and y 
+x_train_m1_health <- model.matrix(factor(satisfied) ~ sf12mcs_lagged2 + sf12mcs_lagged1 + sub_wellbeing_lagged2 + 
+                                    sub_wellbeing_lagged1 + swemwbs_lagged + sf12pcs_lagged2 + 
+                                    sf12pcs_lagged1 + genhealth_lagged2 + genhealth_lagged1 +
+                                    factor(weight_class_lagged2) + factor(weight_class_lagged1),
+                                  data = train)[ ,-1]
+x_test_m1_health <- model.matrix(factor(satisfied) ~ sf12mcs_lagged2 + sf12mcs_lagged1 + sub_wellbeing_lagged2 +
+                                   sub_wellbeing_lagged1 + swemwbs_lagged + sf12pcs_lagged2 + 
+                                   sf12pcs_lagged1 + genhealth_lagged2 + genhealth_lagged1 +
+                                   factor(weight_class_lagged2) + factor(weight_class_lagged1),
+                                  data = test)[ ,-1]
+
+y_train <- train$satisfied 
+y_test <- test$satisfied 
+
+# Setting up 10-fold cross validation
+cv <- cv.glmnet(x_train_m1_health, y_train, alpha = 1, nfolds = 10, family = "binomial")
+
+# Identifying smallest lambda value for LASSO
+lambda.min <- cv$lambda.min
+
+# Fit the Lasso model using the optimal lambda value
+lasso.m1_health <- glmnet(x_train_m1_health,y_train, alpha = 1, lambda = lambda.min, family = "binomial", standardize = TRUE)
+
+coef(lasso.m1_health)
+```
+The initial model finds both self-rated physical and mental health to positively predict satisfaction levels. While mental health scores (`sf12mcs`), subjective well-being (`sub_wellbeing`), and general health scores (`genhealth`) across waves 1 and 2 are both significant predictors, only physical health scores (`sf12pcs`) from wave 2 predict better satisfaction. Compared to being at a normal weight class, being obese in waves 1 and 2 generally predict lower satisfaction. Being underweight and overweight in wave 1 (but not wave 2) however are also predictive of lower satisfaction. Below, I use the initial model to predict wave 3 satisfaction levels.
+
+```{r}
+# Setting seed for reproducibility
+set.seed(123)
+
+predictions <- as.data.frame(test$satisfied)
+names(predictions)[1] <- "satisfied"
+predictions$satisfied <- as.factor(predictions$satisfied)
+
+predictions$m1_health <- predict(lasso.m1_health, newx = x_test_m1_health, 
+                             s = lambda.min, type = "response")
+```
+
+I calculate the accuracy by matching the predicted `satisfied` against the observed `satisfied`, and then find the proportion of correctly matched results as a fraction of the total number of observations. Probabilities greater than 0.5 are treated as 1 (satisfied), and 0 otherwise (unsatisfied). 
+```{r}
+predictions$m1_health <- as.factor(ifelse(predictions$m1_health >0.5, 1,0))
+
+# Constructing confusion matrix
+m1_health_cm <- confusionMatrix(predictions$m1_health, predictions$satisfied)
+
+# Calculate overall accuracy
+m1_health_accuracy <- m1_health_cm$overall[1]
+```
+
+The accuracy of the basic model in predicting `satisfaction` in wave 3 is `r m1_health_accuracy`
+
+Building on model 1, I establish relevant controls inclusive of age, gender, ethnicity, migrant status, and education.
+
+```{r}
+# Setting seed for reproducibility
+set.seed(123)
+
+x_train_m2_health <- model.matrix(factor(satisfied) ~ factor(male) + factor(ethn) + factor(migrant) +
+                                    age_lagged2 + age_lagged1 + edu_lagged2 +
+                                    edu_lagged1 +  sf12mcs_lagged2 + sf12mcs_lagged1 +
+                                    sub_wellbeing_lagged2 + sub_wellbeing_lagged1 + swemwbs_lagged +
+                                    sf12pcs_lagged2 + sf12pcs_lagged1 + genhealth_lagged2 +
+                                    genhealth_lagged1 + factor(weight_class_lagged2) + factor(weight_class_lagged1),
+                                  data = train)[ ,-1]
+
+x_test_m2_health <- model.matrix(factor(satisfied) ~ factor(male) + factor(ethn) + factor(migrant) +
+                                   age_lagged2 + age_lagged1 + edu_lagged2 +
+                                   edu_lagged1 +  sf12mcs_lagged2 + sf12mcs_lagged1 +
+                                   sub_wellbeing_lagged2 + sub_wellbeing_lagged1 + swemwbs_lagged +
+                                   sf12pcs_lagged2 + sf12pcs_lagged1 + genhealth_lagged2 +
+                                   genhealth_lagged1 + factor(weight_class_lagged2) + factor(weight_class_lagged1),
+                                  data = test)[ ,-1]
+
+# Setting up 10-fold cross validation
+cv <- cv.glmnet(x_train_m2_health, y_train, alpha = 1, nfolds = 10, family = "binomial")
+
+# Identifying smallest lambda value for LASSO
+lambda.min <- cv$lambda.min
+
+# Fit the Lasso model using the optimal lambda value
+lasso.m2_health <- glmnet(x_train_m2_health,y_train, alpha = 1, lambda = lambda.min, family = "binomial", standardize = TRUE)
+coef(lasso.m2_health)
+```
+After establishing controls, results do not appear to have changed much. Self-rated physical and mental health scores across all waves now positively predict life satisfaction. Non-normal weight classes, such as being obese and underweight, also still serve as important predictors of life satisfaction. Being underweight in wave 2 now also negatively predicts life satisfaction. I use this model to predict on the test set.
+```{r}
+predictions$m2_health <- predict(lasso.m2_health, newx = x_test_m2_health, 
+                             s = lambda.min, type = "response")
+predictions$m2_health <- as.factor(ifelse(predictions$m2_health >0.5, 1,0))
+
+# Constructing confusion matrix
+m2_health_cm <- confusionMatrix(predictions$m2_health, predictions$satisfied)
+
+# Calculate overall accuracy
+m2_health_accuracy <- m2_health_cm$overall[1]
+```
+
+Predicting on the test set using the second model yields predictions that are marginally more accurate (`r m2_health_accuracy`) than the first model (`r m1_health_accuracy`).
+
+
+### Sociodemographic factors 
+
+In line with the literature, I also investigate how well sociodemographic variables --in particular, economic factors, ethnicity, and migrant status-- predict life satisfaction. The initial model takes in a range of variables without controls. For variables relating to one's personal/familial income decile and class, I omit wave 1 data to avoid collinearity with wave 2 data and income/class mobility. 
+
+```{r}
+# Setting seed for reproducibility
+set.seed(123)
+
+x_train_m1_ses <- model.matrix(factor(satisfied) ~ factor(ethn) + factor(migrant) + factor(emp_status_lagged2) +
+                                 factor(emp_status_lagged1) + incDec_wave2 + hh_incDec_wave2 +
+                                 class_wave2 + class_mobility + inc_mobility + hh_inc_mobility,
+                               data = train)[ ,-1]
+
+x_test_m1_ses <- model.matrix(factor(satisfied) ~ factor(ethn) + factor(migrant) + factor(emp_status_lagged2) +
+                                factor(emp_status_lagged1) + incDec_wave2 + hh_incDec_wave2 +
+                                class_wave2 + class_mobility + inc_mobility + hh_inc_mobility,
+                              data = test)[ ,-1]
+
+# Setting up 10-fold cross validation
+cv <- cv.glmnet(x_train_m1_ses, y_train, alpha = 1, nfolds = 10, family = "binomial")
+
+# Identifying smallest lambda value for LASSO
+lambda.min <- cv$lambda.min
+
+# Fit the Lasso model using the optimal lambda value
+lasso.m1_ses <- glmnet(x_train_m1_ses,y_train, alpha = 1, lambda = lambda.min, family = "binomial", standardize = TRUE)
+coef(lasso.m1_ses)
+```
+
+In this initial model, all ethnicities predict lower satisfaction levels compared to being white. Interestingly, being a migrant exerts positive effects on one's life satisfaction, although the coefficient is relatively small. It is possible however, that this may differ across different classes/occupations to reflect varying satisfaction across high-skilled and low-skilled migrants. I add an interaction term into the model subsequently. Compared to being unpaid, being in paid roles lowers the likelihood of being satisfied, therefore contradicting the basic needs hypothesis. While being in training roles (apprenticeships, education etc) in wave 2 raises the likelihood of being satisfied, being in training roles the previous wave does not predict satisfaction. As the results show, greater household income predicts greater satisfaction, while individual income does not influence the likelihood of being satisfied. Being in an upper class positively predict greater satisfaction, although upward class mobility predicts marginally lower satisfaction. Similar to class mobility, income- and household income mobility similarly serve as predictors of satisfaction, although the coefficients are rather small. 
+
+
+Using this model, I predict wave 3 satisfaction and assess its accuracy by matching it against the test set. 
+```{r}
+predictions <- as.data.frame(test$satisfied)
+names(predictions)[1] <- "satisfied"
+predictions$satisfied <- as.factor(predictions$satisfied)
+
+predictions$lasso_m1_ses <- predict(lasso.m1_ses, newx = x_test_m1_ses, 
+                             s = lambda.min, type = "response")
+
+predictions$lasso_m1_ses <- as.factor(ifelse(predictions$lasso_m1_ses >0.5, 1,0))
+
+```
+
+I try to calculate the accuracy by matching the predicted `satisfied` against the observed `satisfied`, and then find the proportion of correctly matched results as a fraction of the total number of observations.
+
+```{r}
+# Constructing confusion matrix
+m1_ses_cm <- confusionMatrix(predictions$lasso_m1_ses, predictions$satisfied)
+
+# Calculate overall accuracy
+m1_ses_accuracy <- m1_ses_cm$overall[1]
+```
+The accuracy of the basic model in predicting `satisfaction` in wave 3 is `r m1_ses_accuracy`, which is slightly smaller than that of the model comprising health-related variables. 
+
+Building onto model 1, I establish controls for demographic variables such as age, sex, and education.
+```{r}
+# Setting seed for reproducibility
+set.seed(123)
+
+# Setting up test and train 
+x_train_m2_ses<- model.matrix(as.factor(satisfied) ~ age_lagged2 + age_lagged1 + factor(male) + 
+                                edu_lagged2 + edu_lagged1 + factor(ethn) + 
+                                factor(migrant) + factor(emp_status_lagged2) + factor(emp_status_lagged1) +
+                                incDec_wave2 + hh_incDec_wave2 + class_wave2 +
+                                class_mobility + inc_mobility + hh_inc_mobility,
+                           data = train)[ ,-1]
+                  
+
+x_test_m2_ses <- model.matrix(as.factor(satisfied) ~ age_lagged2 + age_lagged1 + factor(male) +
+                                edu_lagged2 + edu_lagged1 + factor(ethn) +
+                                factor(migrant) + factor(emp_status_lagged2) + factor(emp_status_lagged1) +
+                                incDec_wave2 + hh_incDec_wave2 + class_wave2 +
+                                class_mobility + inc_mobility + hh_inc_mobility,
+                           data = test)[ ,-1]
+
+# Setting up 10-fold cross validation
+cv <- cv.glmnet(x_train_m2_ses, y_train, alpha = 1, nfolds = 10, family = "binomial")
+
+# Identifying smallest lambda value for LASSO
+lambda.min <- cv$lambda.min
+
+# Fit the Lasso model using the optimal lambda value
+lasso.m2_ses <- glmnet(x_train_m2_ses,y_train, alpha = 1, lambda = lambda.min, family = "binomial", standardize = TRUE)
+coef(lasso.m2_ses)
+```
+After controlling for covariates, results remain mostly the same. Individual income now negatively predicts lower likelihood of being satisfied, while being in training (compared to unpaid) roles in wave 1 also positively predict satisfaction. I use this model to predict wave 3 life satisfaction.
+
+```{r}
+# Predicting on test set
+predictions$lasso_m2_ses <- predict(lasso.m2_ses, newx = x_test_m2_ses, 
+                             s = lambda.min, type = "response")
+
+# Transforming results into binary for easy matching
+predictions$lasso_m2_ses <- as.factor(ifelse(predictions$lasso_m2_ses >0.5, 1,0))
+
+# Constructing confusion matrix
+m2_ses_cm <- confusionMatrix(predictions$lasso_m2_ses, predictions$satisfied)
+
+# Calculate overall accuracy
+m2_ses_accuracy <- m2_ses_cm$overall[1]
+
+```
+
+Using model 2 to predict wave 3 results, the accuracy of the prediction deteriorates slightly to become `r m2_ses_accuracy`. As mentioned above, given that migrant effects on satisfaction may differ according to one's class or occupation, I add an interaction term between `migrant` and `class_wave2`. 
+
+```{r}
+# Setting seed for reproducibility
+set.seed(123)
+
+# Setting up test and train 
+x_train_m3_ses <- model.matrix(as.factor(satisfied) ~ age_lagged2 + age_lagged1 + factor(male) +
+                                 edu_lagged2 + edu_lagged1 + factor(ethn) +
+                                 factor(emp_status_lagged2) + factor(emp_status_lagged1) + incDec_wave2 +
+                                 hh_incDec_wave2 + class_mobility + inc_mobility +
+                                 hh_inc_mobility + factor(migrant) * class_wave2,
+                           data = train)[ ,-1]
+
+x_test_m3_ses <- model.matrix(as.factor(satisfied) ~ age_lagged2 + age_lagged1 + factor(male) +
+                                edu_lagged2 + edu_lagged1 + factor(ethn) +
+                                factor(emp_status_lagged2) + factor(emp_status_lagged1) + incDec_wave2 +
+                                hh_incDec_wave2 + class_mobility + inc_mobility +
+                                hh_inc_mobility + factor(migrant) * class_wave2,
+                           data = train)[ ,-1]
+
+# Setting up 10-fold cross validation
+cv <- cv.glmnet(x_train_m3_ses, y_train, alpha = 1, nfolds = 10, family = "binomial")
+
+# Identifying smallest lambda value for LASSO
+lambda.min <- cv$lambda.min
+
+# Fit the Lasso model using the optimal lambda value
+lasso.m3_ses <- glmnet(x_train_m3_ses,y_train, alpha = 1, lambda = lambda.min, family = "binomial", standardize = TRUE)
+coef(lasso.m3_ses)
+```
+Results show that migrant effects do not differ across class/occupation, implying that prediction accuracy would not change by much. I use this to predict wave 3 satisfaction levels. 
+
+```{r}
+# Predicting on test set
+predictions$lasso_m3_ses <- predict(lasso.m3_ses, newx = x_test_m3_ses, 
+                             s = lambda.min, type = "response")
+
+# Transforming results into binary for easy matching
+predictions$lasso_m3_ses <- as.factor(ifelse(predictions$lasso_m3_ses >0.5, 1,0))
+
+# Constructing confusion matrix
+m3_ses_cm <- confusionMatrix(predictions$lasso_m3_ses, predictions$satisfied)
+
+# Calculate overall accuracy
+m3_ses_accuracy <- m3_ses_cm$overall[1]
+```
+
+As expected, the predictive accuracy does not change much after adding the interaction terms (`r m3_ses_accuracy`).
+
+### Household factors
+
+Next, I focus on household factors to predict life satisfaction. I create an initial model consisting of just the household size (`hhsize_lagged`), the number of children in the household (`nchild_lagged`), and one's union status (`union_lagged`).
+
+```{r}
+# Setting seed for reproducibility
+set.seed(123)
+
+x_train_m1_household <- model.matrix(as.factor(satisfied) ~ hhsize_lagged2 + nchild_lagged2
+                                     + factor(union_lagged),
+                                     data = train)[ ,-1]
+
+x_test_m1_household <- model.matrix(as.factor(satisfied) ~ hhsize_lagged2 + nchild_lagged2
+                                     + factor(union_lagged),
+                                     data = test)[ ,-1]
+
+# Setting up 10-fold cross validation
+cv <- cv.glmnet(x_train_m1_household, y_train, alpha = 1, nfolds = 10, family = "binomial")
+
+# Identifying smallest lambda value for LASSO
+lambda.min <- cv$lambda.min
+
+# Fit the Lasso model using the optimal lambda value
+lasso.m1_household <- glmnet(x_train_m1_household,y_train, alpha = 1, lambda = lambda.min, family = "binomial", standardize = TRUE)
+coef(lasso.m1_household)
+```
+
+All factors appear to predict life satisfaction. Notably, in line with past literature, bigger household sizes and having more children predict lower life satisfaction, while being in a union positively predict satisfaction levels. I use the initial model to predict life satisfaction and assess its accuracy below.
+
+
+```{r, warning = FALSE}
+predictions$m1_household <- predict(lasso.m1_household, newx = x_test_m1_household, 
+                             s = lambda.min, type = "response")
+
+predictions$m1_household <- as.factor(ifelse(predictions$m1_household >0.5, 1,0))
+
+# Constructing confusion matrix
+m1_household_cm <- confusionMatrix(predictions$m1_household, predictions$satisfied)
+
+# Calculate overall accuracy
+m1_household_accuracy <- m1_household_cm$overall[1]
+```
+
+The accuracy of using household factors to predict satisfaction levels is `r m1_household_accuracy`.
+
+Next, I include the relevant control variables of sex, age, and education levels into the model. 
+```{r}
+# Setting seed for reproducibility
+set.seed(123)
+
+x_train_m2_household <- model.matrix(as.factor(satisfied) ~ factor(male) + age_lagged2 + edu_lagged2 + 
+                                       hhsize_lagged2 + nchild_lagged2 + factor(union_lagged),
+                                     data = train)[ ,-1]
+
+x_test_m2_household <- model.matrix(as.factor(satisfied) ~ factor(male) + age_lagged2 + edu_lagged2 + 
+                                       hhsize_lagged2 + nchild_lagged2 + factor(union_lagged),
+                                     data = test)[ ,-1]
+
+cv <- cv.glmnet(x_train_m2_household, y_train, alpha = 1, nfolds = 10, family = "binomial")
+
+# Identifying smallest lambda value for LASSO
+lambda.min <- cv$lambda.min
+
+# Fit the Lasso model using the optimal lambda value
+lasso.m2_household <- glmnet(x_train_m2_household,y_train, alpha = 1, lambda = lambda.min, family = "binomial", standardize = TRUE)
+coef(lasso.m2_household)
+```
+
+Including controls do not appear to alter results. Bigger family sizes and having more children still appear to predict worse satisfaction; whereas being in a union positively predict life satisfaction. I use this updated model to predict life satisfaction. 
+
+```{r}
+# Predicting on test set
+predictions$lasso_m2_household <- predict(lasso.m2_household, newx = x_test_m2_household, 
+                             s = lambda.min, type = "response")
+
+# Transforming results into binary for easy matching
+predictions$lasso_m2_household <- as.factor(ifelse(predictions$lasso_m2_household >0.5, 1,0))
+
+# Calculating accuracy
+prop_correct_m2_household <- (sum(predictions$lasso_m2_household == predictions$satisfied))/nrow(predictions)
+
+# Constructing confusion matrix
+m2_household_cm <- confusionMatrix(predictions$lasso_m2_household, predictions$satisfied)
+
+# Calculate overall accuracy
+m2_household_accuracy <- m2_household_cm$overall[1]
+
+```
+
+The model's accuracy is similar to that of the first (`r m2_household_accuracy`).  
+
+
+### Combining all factors
+
+Having now examined all factors, I combine them into one single model, including controls and interaction terms. 
+
+```{r}
+# Setting seed for reproducibility
+set.seed(123)
+
+# Predicting on test set
+x_train_m4 <- model.matrix(as.factor(satisfied) ~ factor(male) + factor(migrant) + factor(ethn) + 
+                             age_lagged2 + age_lagged1 + edu_lagged2 +
+                             edu_lagged1 + factor(weight_class_lagged2) + factor(weight_class_lagged1) + 
+                             sf12mcs_lagged2 + sf12mcs_lagged1 + sf12pcs_lagged2 + 
+                             sf12pcs_lagged1 + swemwbs_lagged + hhsize_lagged2 +
+                             factor(emp_status_lagged2) + factor(emp_status_lagged1) + nchild_lagged2 +
+                             genhealth_lagged2 + genhealth_lagged1 + sub_wellbeing_lagged2 +
+                             sub_wellbeing_lagged1 + incDec_wave2 + hh_incDec_wave2 +
+                             factor(union_lagged) + inc_mobility + hh_inc_mobility + 
+                             class_mobility + factor(migrant) * class_wave2,
+                           data = train)[ ,-1]
+
+x_test_m4 <- model.matrix(as.factor(satisfied) ~ factor(male) + factor(migrant) + factor(ethn) + 
+                             age_lagged2 + age_lagged1 + edu_lagged2 +
+                             edu_lagged1 + factor(weight_class_lagged2) + factor(weight_class_lagged1) + 
+                             sf12mcs_lagged2 + sf12mcs_lagged1 + sf12pcs_lagged2 + 
+                             sf12pcs_lagged1 + swemwbs_lagged + hhsize_lagged2 +
+                             factor(emp_status_lagged2) + factor(emp_status_lagged1) + nchild_lagged2 +
+                             genhealth_lagged2 + genhealth_lagged1 + sub_wellbeing_lagged2 +
+                             sub_wellbeing_lagged1 + incDec_wave2 + hh_incDec_wave2 +
+                             factor(union_lagged) + inc_mobility + hh_inc_mobility + 
+                             class_mobility + factor(migrant) * class_wave2,
+                           data = test)[ ,-1]
+
+# Setting up 10-fold cross validation
+cv <- cv.glmnet(x_train_m4, y_train, alpha = 1, nfolds = 10, family = "binomial")
+
+# Identifying smallest lambda value for LASSO
+lambda.min <- cv$lambda.min
+
+# Fit the Lasso model using the optimal lambda value
+lasso.m4 <- glmnet(x_train_m4,y_train, alpha = 1, lambda = lambda.min, family = "binomial", standardize = TRUE)
+coef(lasso.m4)
+```
+Combining all models together, migrant status and education levels in wave 1 appear to have lost significance as a predictor, although now migrant status interacts with class. Specifically, being a migrant appears to exacerbate the negative effects of class in predicting satisfaction levels. Otherwise, results appear largely the same. I use this model to predict on the test set.
+
+```{r}
+# Setting seed for reproducibility
+set.seed(123)
+
+predictions$lasso_m4 <- predict(lasso.m4, newx = x_test_m4, 
+                             s = lambda.min, type = "response")
+
+# Transforming results into binary for easy matching
+predictions$lasso_m4 <- as.factor(ifelse(predictions$lasso_m4 >0.5, 1,0))
+
+# Constructing confusion matrix
+m4_cm <- confusionMatrix(predictions$lasso_m4, predictions$satisfied)
+
+# Calculate overall accuracy
+m4_accuracy <- m4_cm$overall[1]
+
+# Calculate sensitivity
+m4_sensitivity <- m4_cm$byClass[1]
+
+# Calculate specificity
+m4_specificity <- m4_cm$byClass[2]
+
+# Calculate precision
+m4_precision <- m4_cm$byClass[4]
+```
+
+In using this combined model to predict on the test set, the accuracy from the combined model is `r m4_accuracy`. 
+```{r}
+m4_accuracy
+```
+
+
+I further assess its sensitivity, which reflects the proportion of true positives (i.e., correctly predicted satisfied individuals) out of the actual number of people who were satisfied, to be `r m4_sensitivity`.
+```{r}
+m4_sensitivity
+```
+
+
+In contrast the specificity, which is the proportion of true negatives (i.e., correctly predicted people who were not satisfied) out of the actual number of people who were not satisfied, is `r m4_specificity`. 
+```{r}
+m4_specificity
+```
+
+
+Finally, the precision, which is the proportion of true positives out of the predicted positives, is `r m4_precision`.
+```{r}
+m4_precision
+```
+
+Overall the combined model has fairly good performance, with high specificity and precision but lower sensitivity. 
+
+Looking at the benchmark and combined models above, the predictions are generally quite accurate, ranging from approximately 73% to 76% accuracy. One possible reason is that I am only predicting data that is one to two years ahead, during which there may be little changes in (1) the predictor variables; and (2) the relationship between the predictor variables and satisfaction levels. For instance, it is unlikely that one's class or household arrangement would have changed drastically in a short span of time; and any such changes would also be unlikely to produce a huge change in satisfaction levels. Given a relatively constant relationship between predictor variables and satisfaction levels, there would therefore be low prediction errors and high accuracy. 
+
+Of the models above, the model consisting of (mental and physical) health-related variables yields the highest accuracy (`r m2_health_accuracy`). This is in line with the literature, which identifies strong associations between one's mental well-being and his/her life satisfaction. Possibly, this is due to the direct impact that health have on satisfaction, as well as other outcomes such as one's labour force participation. Other variables, such as household size and socioeconomic factors, may otherwise be less direct predictors of satisfaction since they may be mediated by attitudes and individual preferences. As @swift_04 suggests, some individuals may prefer remaining in their class of origin rather than seek upward mobility for various reasons -- for instance, if the ascent to the upper classes require too much effort, or if the onerous nature of upper-class employment conflicts with their individual preferences for a laid-back lifestyle. In contrast, it would be less conceivable that individuals may 'prefer' worse health, thereby serving as a more direct predictor of life satisfaction.  
+
+In addition to the current dataset, it would be helpful to include data relating to one's social support. This may include information about their social networks (e.g., friendship circle, closeness to relatives etc), the kinds of state assistance they are receiving, or their perceived integration in the communities they are currently in. @livani_19 for instance, find that income assistance is less conducive to life satisfaction, compared to self-generated income. This is due in part to the stigma and disempowerment effects associated with social protection programmes. In contrast, perceived social support by social networks showed positive significant effects on life satisfaction, suggesting the indirect role of attachment on satisfaction [@shahyad_11].
+
+Personality traits, such as one's extraversion and locus-of-control orientation, are also frequently studied in psychological research pertaining to life satisfaction (Abu-Bader et al., 2003). @girzadas_93 for instance, find that individuals who score high on *chance* locus-of-control tend to score low on life satisfaction due to a perceived lack of control in their circumstances. In contrast, individuals who score high on internal locus-of-control tend to score high on life satisfaction relative to those with external or chance locus-of-control orientation [@haber_94; @searle_95; @lai_95].
+
+Finally, genetic data such as polygenic scores for traits related to satisfaction --e.g., extraversion and neuroticism-- has also been found to predict variance in life satisfaction (Weiss et al., 2016). The inclusion of these variables would have been useful to better predict life satisfaction. 
+
+# Question 2
+
+First, I write a function to create lagged values. Essentially, this function takes in the number of waves that I wish to include into the model, and create new lagged variables. 
+
+```{r}
+lag_variables <- function(data, var, num_lags) {
+  for (i in 1:num_lags) {
+    new_var <- paste0("lagged", i, "_", var)
+    data <- data %>% 
+      mutate(!!new_var := dplyr::lag(!!sym(var), n = num_lags-i+1))
+  }
+  return(data)
+}
+```
+
+I then create a subset of data with only non-negative values of gross monthly personal income, and include several variables that are likely to be predictors of gross monthly personal income. In particular, ethnicity and education are widely studied as predictors of income. @mcfall_11 for instance find that individuals with lower education, and households consisting of non-White ethnicity to significantly predict lower levels of income. In a similar strand of research, @blanden_13 also identify a correlation between education and income. These findings are therefore indicative of a relationship connecting income to these demographic variables. I therefore include one's sex (`sex_dv`), ethnicity (`ethn_dv`) and highest qualification (`hiqual_dv`) into my model. Meanwhile, although gender equality has ameliorated the wage gap between men and women, @blau_07 have found persisting gender differentials in pay, with women continuing to earn considerably less than men. These two findings are further in line with a intersectional perspective, in which female-disadvantage effects are stronger among minority women compared to white women [@greenman_08]. Of these varibles, I engineer a variable `male` to reflect one's male status; `ethn` and `edu` are also engineered variables in line with how it was conceptualised in question 1.  
+
+Beyond such factors, class also consistently surface in literature pertaining to one's income. As mentioned above, this is due in part to the employment relationships workers have with their employers. Workers of service class, for instance, are less replaceable due to the specialised technical knowledge that they possess; such workers therefore possess a stronger bargaining power as to their wages. The nature of such specialised work also imply a poorer ability of the firm and employers to monitor their work performance. This means that employers are more inclined to pay these workers a higher wage to align them with organisational goals and interests [@breen_09]. Taking this view, I also include variables relating one's class, as proxied by one's occupation type (`jbnssec8_dv`), and whether or not this is a paid position (`jbstat`). I further include other job-related variables, such as whether one has a second job (`j2has`) or if their job is a full-time position (`jbft_dv`).
+
+Apart from one's class, research has often also examined links between income and political participation, such as voting patterns or membership in political organisations. Voting patterns and prevalence differ, for instance, according to one's socioeconomic status [@weakliem_94]. @gallego_07 too concurs with this observation, finding that political participation are stratified by social class and income. Taking a multilevel perspective, @cicatiello_15 also find income inequality to shape patterns of political engagement by citizens. I therefore construct a variable to measure one's political engagement (`pol_participation`), as measured by averaging the dichotomous scores of one's general interest in politics (`vote6`), if he/she has voted in the previous election (`vote7`), if he/she is intending to vote in the next election (`voteintent`), and their perception of voting as a norm (`votenorm`). 
+
+I include the relevant variables below. 
+
+```{r}
+ltd_subset2 <- ltd_df %>%
+  filter(fimngrs_dv>=0) %>%
+  
+  # Male or not
+  mutate(male = ifelse(sex_dv == 1, 1,0)) %>%
+  
+  # Ethnic status
+  mutate(ethn = ifelse(ethn_dv %in% 1:4, 0,
+                       ifelse(ethn_dv %in% 5:8, 4,
+                              ifelse(ethn_dv %in% 9:13, 3,
+                                     ifelse(ethn_dv %in% 14:16, 2,
+                                            ifelse(ethn_dv == 17, 1, NA)))))) %>%
+  mutate(ethn = factor(ethn,
+                 levels = c(0,1,2,3,4),
+                 labels = c("white", "arab", "black", "asian", "mixed"))) %>%
+  
+  # Education
+  mutate(edu = ifelse(hiqual_dv == 9, 6, hiqual_dv)) %>%
+           mutate(edu = 6 - edu) %>%
+  
+  # Kind of employment
+  mutate(emp_status = ifelse(jbstat == 97, NA, 
+                           ifelse(jbstat %in% c(3,4,6, 8,10), 1, 
+                           ifelse(jbstat %in% c(7, 9, 11), 2, 3)))) %>%
+  mutate(emp_status = factor(emp_status,
+                      levels = c(1,2,3),
+                      labels = c("unpaid", "training", "paid"))) %>%
+  
+  # Class according to NS-SEC (in line with Goldthorpe's class schema)
+  mutate(class = ifelse(emp_status == "unpaid" & is.na(jbnssec8_dv), 1,
+                      ifelse(jbnssec8_dv %in% c(1,2), 4,
+                      ifelse(jbnssec8_dv %in% c(3,4,5), 3, 
+                      ifelse(jbnssec8_dv == 6, 2, 1))))) %>%
+
+  mutate(class = factor(class,
+                        levels = c(1,2,3,4),
+                        labels = c("manual","petty bourgeois","intermediate","service"))) %>%
+  
+  # Part-time vs Full-time
+  mutate(fulltime = ifelse(jbft_dv == 1, 1,0)) %>%
+  
+  # Second job
+  mutate(secondJob = ifelse(j2has == 1, 1,0)) %>%
+  
+  # Interest in politics
+  mutate(pol_interested = ifelse(vote6 <= 2, 1,0)) %>%
+  
+  # Vote last election
+  mutate(pol_votePrevious = ifelse(vote7 == 3, NA,
+                                   ifelse(vote7 == 1, 1, 0))) %>%
+  
+  # Voting as a norm
+  mutate(votenorm = ifelse(votenorm <= 2, 1, 0)) %>%
+  
+  # Voting intent
+  mutate(voteintent = ifelse(voteintent == 11, NA, 
+                             ifelse(voteintent == 10, 1, 0))) %>%
+  
+  # Political participation
+  mutate(pol_participation = 1/4* (pol_interested + pol_votePrevious + votenorm 
+                                    + voteintent)) %>%
+  
+select(pidp,wave, fimngrs_dv, ethn, edu, age_dv,male, emp_status,class,jbhrs,
+         jbot,fulltime,secondJob, pol_participation)
+```
+
+Ensuring that the variables I have selected are correct:
+```{r}
+colnames(ltd_subset2)
+```
+
+I then impute missing data.
+```{r}
+# Setting seed for reproducibility
+set.seed(123)
+
+to_impute2 <- ltd_subset2
+
+imputed2 <- amelia(data.frame(to_impute2),
+                    noms = c("fulltime", "secondJob","pol_participation", "ethn", "male"),
+                    ords = c("emp_status", "class", "edu"),
+                    idvars = c("pidp"),
+                    m = 1, boot.type = "none", p2s = 0)
+
+prepared_data2 <- imputed2$imputations$imp1
+```
+
+Making sure that no more NA data exists
+```{r}
+which(is.na(prepared_data2))
+```
+
+
+To prepare my dataset for analysis, I create lagged values of my selected variables across all 8 waves. 
+```{r}
+df_lagged2 <- prepared_data2 %>%
+  group_by(pidp) %>%
+    lag_variables(var = c("emp_status"), num_lags = 8) %>%
+    lag_variables(var = c("class"), num_lags = 8) %>%
+    lag_variables(var = c("jbhrs"), num_lags = 8) %>%
+    lag_variables(var = c("jbot"), num_lags = 8) %>%
+    lag_variables(var = c("fulltime"), num_lags = 8) %>%
+    lag_variables(var = c("secondJob"), num_lags = 8) %>%
+    lag_variables(var = c("pol_participation"), num_lags = 8) %>%
+    lag_variables(var = c("age_dv"), num_lags = 8) %>%
+    lag_variables(var = c("edu"), num_lags = 8) %>%
+  ungroup() %>%
+  
+  filter(wave == 9) %>%
+  select(pidp, fimngrs_dv, ethn,male,emp_status, contains(c("lagged"))) %>%
+  drop_na()
+```
+
+Verifying that all the lagged variables are successfully created:
+```{r}
+colnames(df_lagged2)
+```
+Having now created the dataframe with all the relevant variables, I create a function that takes in a wave number to create a benchmark model including all lagged values. Specifying a wave number 6, for instance, would include all lagged variables from waves 1 to 6. 
+
+```{r}
+# Setting seed for reproducibility
+set.seed(123)
+
+# Creating function to create benchmark models
+benchmark_ols <- function(data, wave_number){
+  # Define the variable names to use as predictors, including those of lagged predictors.
+	var_names <- c("fimngrs_dv" ,"ethn", "male")
+	for (i in 1:wave_number) { # this loop select variables based on its naming convention (e.g., wave 1 var starts with "lagged1")
+		lagged_prefix <- paste0("lagged", i)
+			var_names <- c(var_names, paste0(lagged_prefix, "_age_dv"),
+				paste0(lagged_prefix, "_edu"), paste0(lagged_prefix, "_emp_status"),
+				paste0(lagged_prefix, "_class"), paste0(lagged_prefix, "_jbhrs"),
+				paste0(lagged_prefix, "_jbot"), paste0(lagged_prefix, "_fulltime"),
+ 				paste0(lagged_prefix, "_secondJob"), paste0(lagged_prefix, "_pol_participation"))
+	}
+	
+	# Subsetting data to include relevant lagged variables
+	data_prep <- subset(data, select = c(var_names))
+	
+	# Obtaining a vector of numbers to index the rows of df_lagged2 
+  row_indices <- seq_len(nrow(data_prep))
+
+  # Randomly split the indices into a 7-3 split
+  train_indices <- createDataPartition(row_indices, p = 0.7, list = FALSE)
+
+  # Set the complement of train_indices to test_indices
+  test_indices <- setdiff(row_indices, train_indices)
+
+  # Splitting data into 7-3 test-split
+  train2 <- data_prep[train_indices, ]
+  test2 <- data_prep[test_indices, ]
+  y_test <- test2$fimngrs_dv
+	
+	# Fitting linear model
+  ols <- train(fimngrs_dv~.,
+               data = train2,
+               method = "lm")
+  
+  # Predicting on test set
+  predictions <- predict(ols, test2)
+  r2_holdout <- 1 - ((sum((y_test - predictions)^2)) / (sum((y_test - mean(predictions))^2)))
+  
+  return(list(ols = ols, r2 = r2_holdout))
+}
+```
+
+Eyeballing how the benchmark model looks like when incorporating wave 1 data.
+```{r}
+set.seed(123)
+summary(benchmark_ols(df_lagged2, 1)[["ols"]])
+
+```
+Several predictors are crucial in predicting income levels according to the benchmark model using wave 1 data. In particular, male status, being in paid (rather than unpaid) roles, and being in intermediate and service classes are predictive of higher income. Working more (regular and overtime) job hours and taking up a second job are also positively associated with higher incomes. Other variables such as ethnicity (except being Asian) and being in a petty bourgeois class position are not associated with income. Interestingly, being in a full time job as opposed to a part-time job also does not meet the significance threshold as well.
+
+
+Next, I use this benchmark model to predict on the test set (incrementally, from wave 1-8), and store its pseudo $R^2$ in a table called `r2_benchmark`. After predicting, the pseudo $R^2$ values are: 
+
+```{r}
+# Set seed for replicability
+set.seed(123)
+
+# Initialise a dataframe to store r2 holdout values
+r2_benchmark <- data.frame(wave_num = numeric(), r2_benchmark = numeric())
+
+# Creating a loop to predict on test set using incremental wave 1-8 data
+for (i in 1:8) {
+  r2 <- benchmark_ols(df_lagged2, i)[["r2"]]
+  r2_benchmark <- rbind(r2_benchmark, data.frame(wave_num = i, r2_benchmark = r2))
+}
+
+r2_benchmark
+```
+$R^2$ values seem rather high compared to the results as obtained by @salganik_20. This may be attributed to several reasons. The data quality of this longitudinal survey may be exceptionally good in capturing the various attributes of respondents, enabling the model to predict the outcome variable more accurately. Otherwise, there could be a strong relationship connecting the independent and dependent variables. Finally, it could be the case that the model is facing overfitting issues, which limits the generalisability of its results. To mitigate this issue, I will employ regularisation techniques in my advanced model below. This helps to prevent overfitting by introducing penalties or constraints on irrelevant features, thus minimising the 'noise' and fluctuations in the training data. 
+
+Moving on to more advanced predictive machines, I utilise a nested cross-validation process to train a LASSO model below. To be clear, a nested cross-validation process involves 2 'cycles' of cross-validation, which are contained within an inner and outer loop. The inner loop first performs a cross-validation process on to tune the parameters of the model, such as the lambda value of the LASSO model. Once the smallest lambda value is identified, a LASSO model is fitted with that lambda value. The outer loop then conducts another cross-validation process to select the best model (measured by the $R^2$ value), based on the best lambda value fitted earlier. Doing this allows me to optimise my selection of the final 'best' model by minimising the lambda value and maximising the $R^2$. After deriving the best model from the training and validation data, I then predict the model on the 'out-of-sample' test data to evaluate its predictive power using the pseudo $R^2$ value. 
+
+To achieve this, I first create a function that trains a LASSO model using the nested cross-validation method. The function takes in the relevant dataset, as well as the number of k-folds for both the inner and outer cross validation process. It also takes in wave number as an argument; specifying wave 8 for instance, would include all variables from waves 1 to 8. 
+
+```{r}
+# Setting seed for reproducibility
+set.seed(123)
+
+lasso_income_nested_cv <- function(data, kfolds_outer, kfolds_inner, wave_number) {
+  
+	# Define the variable names to use as predictors, including those of lagged predictors.
+	var_names <- c("fimngrs_dv" ,"ethn")
+	for (i in 1:wave_number) {
+		lagged_prefix <- paste0("lagged", i)
+			var_names <- c(var_names, paste0(lagged_prefix, "_age_dv"),
+				paste0(lagged_prefix, "_edu"), paste0(lagged_prefix, "_emp_status"),
+				paste0(lagged_prefix, "_class"), paste0(lagged_prefix, "_jbhrs"),
+				paste0(lagged_prefix, "_jbot"), paste0(lagged_prefix, "_fulltime"),
+ 				paste0(lagged_prefix, "_secondJob"), paste0(lagged_prefix, "_pol_participation"))
+	}
+	
+	data_prep <- subset(data, select = c(var_names))
+	
+# Set up 7-3 train-test split
+train_indices <- createDataPartition(data_prep$fimngrs_dv, p=0.7, list=FALSE)
+train_data <- data_prep[train_indices, ]
+test_data <- data_prep[-train_indices, ]
+
+# train sets for x and y 
+y_train_set <- train_data$fimngrs_dv
+x_train_set <- model.matrix(fimngrs_dv ~ ., data = train_data)
+
+# test set for x and y
+x_test_set <- model.matrix(fimngrs_dv ~., data = test_data)
+y_test_set <- test_data$fimngrs_dv
+
+# Initialising some default variables to be updated after inner and outer cv. The default values have no significance here since it will be updated after.
+r2_max <- 0
+best_lasso_mod <- glmnet(x_train_set, y_train_set, alpha = 1)
+
+# Setting up outer cross-validation. "outer_fold" will store row indices associated with each fold in the outer loop. 
+outer_fold <- createFolds(y_train_set, k = kfolds_outer, returnTrain = FALSE)
+
+# Looping through the number of folds for the 'outer cv' process
+for (i in 1:length(outer_fold)){
+  outer_validation_index <- outer_fold[[i]] #outer_fold[[i]] retrieves the indices associated with fold i; these indices represent the row numbers associated with the 'validation set'
+  outer_training_index <- setdiff(1:nrow(x_train_set), outer_validation_index) # Rows NOT associated with that fold are assigned to the 'training set' of the CV
+  
+  # Specifying training data for outer cv. I assign the row numbers to create the 'training' set for the outer CV.
+  outer_x_train <- x_train_set[outer_training_index, ]
+  outer_y_train <- y_train_set[outer_training_index]
+  
+  # Specifying validation data for outer cv. I assign the row numbers to create the 'validation' set for the outer CV.
+  outer_x_validation <- x_train_set[outer_validation_index, ]
+  outer_y_validation<- y_train_set[outer_validation_index]
+  
+  # Setting up inner cross-validation. Again, I obtain the row numbers for each fold, this time for the inner CV.
+  inner_fold <- createFolds(outer_y_train, k = kfolds_inner, returnTrain = FALSE)
+  lambda_inner_min <- Inf # initialising a default lambda value for comparison afterwards. This will be updated subsequently and has no significance here.
+  
+    # Looping through the number of folds for inner cv
+    for (j in 1:length(inner_fold)){
+      inner_validation_index <- inner_fold[[j]] # This assigns 'inner_validation_index' with the indices associated with a particular fold j
+      inner_training_index <- setdiff(1:nrow(outer_x_train), inner_validation_index) # Other rows NOT associated with that fold are assigned to 'inner_training_index'
+      
+      # Specifying training data for inner cv. I assign row numbers to create the 'test' set for the inner CV.
+      inner_x_train <- outer_x_train[inner_training_index, ]
+      inner_y_train <- outer_y_train[inner_training_index]
+      
+      # Specifying validation data for inner cv. I assign row numbers to create the 'validation' set for the inner CV.
+      inner_x_validation <- outer_x_train[inner_validation_index, ]
+      inner_y_validation <- outer_y_train[inner_validation_index]
+      
+      # Conducting 'inner cv': train on inner training set to obtain minimum lambda value and assign it to 'lambda_inner_new'
+      fit <- cv.glmnet(inner_x_train, inner_y_train, alpha = 1, nfolds = kfolds_inner)
+      lambda_inner_new <- fit$lambda.min
+      
+      # I compare the newly-obtained lambda with the previous smallest lambda value obtained during the inner loop. If it's smaller, the new lambda value is assigned to 'lambda_inner_min' that exists outside the loop
+        if (lambda_inner_new <= lambda_inner_min){
+          lambda_inner_min <- lambda_inner_new
+        }
+    }
+  
+   # Fitting LASSO model with smallest lambda
+   outer_fit <- glmnet(outer_x_train, outer_y_train, alpha = 1, 
+                      lambda = lambda_inner_min)
+  
+  # Evaluate updated LASSO model (with the smallest lambda) by predicting on the validation set and obtaining the r2 value
+  outer_pred <- predict(outer_fit, newx = outer_x_validation)
+  r2 <- 1 - ((sum((outer_y_validation - outer_pred)^2)) / 
+               (sum((outer_y_validation - mean(outer_pred))^2)))
+  
+  # Determining best LASSO model based on largest r2 value. This compares the newly obtained r2 value with the previous largest r2 value in the outer loop. The model with the largest r2 (given the lambda obtained previously) then forms the final 'best' model and is assigned to 'best_lasso_mod' that exists outside the loop.
+    if(r2 > r2_max){
+      r2_max <- r2
+      best_lasso_mod <- outer_fit
+    }
+}
+
+# Predicting on test set using 'best_lasso_mod'
+predictions <- predict(best_lasso_mod, newx = x_test_set)
+r2_holdout <- 1 - ((sum((y_test_set - predictions)^2)) / (sum((y_test_set - mean(predictions))^2)))
+
+return(r2_holdout)
+}
+```
+
+Now that the function is complete, I use it to predict wave 1 to wave 8 data incrementally, using 10 folds each for the inner and outer cross validation. The pseudo $R^2$ for both the benchmark and nested cross-validation LASSO models are as follows:
+```{r}
+# Set seed for replicability
+set.seed(123)
+
+# Initialise a dataframe to store r2 holdout values
+r2_lasso<- data.frame(wave_num = numeric(), r2_lasso = numeric())
+
+# Looping from waves 1 through 8 and storing r2 value into r2_lasso
+for (i in 1:8) {
+  r2 <- lasso_income_nested_cv(df_lagged2, 10, 10, i)
+  r2_lasso <- rbind(r2_lasso, data.frame(wave_num = i, r2_lasso = r2))
+}
+
+# Merging dataframe between the benchmark and the lasso for easier comparison of r2 values
+r2_combined <- left_join(r2_benchmark, r2_lasso, by = "wave_num")
+r2_combined
+```
+
+In line with @salganik_20, using more predictive machines did not improve or alter the accuracy by much, compared to baseline regression models. In fact, predicting the test set using nested cross-validation method with incremental data from several waves results in a lowered accuracy across all waves, except when incorporating all data from waves 1-8. However, it is clear that using increasingly proximate data results in greater accuracy, as observed by the $R^2$ value rising from `r r2_lasso$r2_lasso[r2_lasso$wave_num == 1]` to `r r2_lasso$r2_lasso[r2_lasso$wave_num == 8]` by incrementally incorporating more recent data up to wave 8 for the advanced prediction model. Such increased accuracy extends similarly to the benchmark model by including data from more proximate waves. 
+
+Being able to accurately predict the life course raises several ethical concerns. One concern pertains to the likely tendency for people to resort to deterministic understandings of one's life course. This may in turn lead to sanctions being imposed on individuals who are predicted to have negative outcomes. One example relates to predictions concerning criminal behaviour: individuals who are predicted to be likely to engage in crimes may face intensified discrimination from the public and law enforcement, even if the crime has not been committed. Otherwise, schools may also choose to not enroll students who are predicted to be academically unsuccessful, since they are unlikely to benefit from the education system anyway. But even in a situation where one's educational outcome can be perfectly predicted, less academically-able individuals may still benefit from education for many reasons, such as being socialised into societal norms and self-enrichment. Discriminating on the basis of one's predicted outcomes thus deprive individuals of such experiences. Ultimately, such predictions form the basis upon which unethical means, such as discrimination or educational deprivation, can be easily justified. 
+
+A further implication of such deterministic understandings is that it may create self-fulfilling prophecies by eliminating the will to exercise agency over one's life choices. In an extreme example, individuals who are predicted to have an earlier age at death for instance, may choose to engage in more high-risk activities from which they derive more short-term utility, since they are predicted to have a shorter lifespan anyway. Otherwise, individuals who are discriminated in the labour market due to their high likelihood of being a criminal may indeed, turn to crime as a means of survival. In such a scenario, criminals may also defend their actions as being pre-determined, rather than an outcome of their own free will. The ethical conundrum then, pertains to the degree to which criminals should be held responsible for their actions. 
+
+Secondly, because the focus of predictive models revolves around predicted *outcomes*, less attention is paid to the underlying *mechanisms* that drive such outcomes. For instance, a model which can predict the likelihood of becoming a criminal on the basis of one's class origin does not explicate exactly how, say, one's social class influences his/her criminal behaviour. This potentially shifts the discourse from one of tackling the mechanisms of criminal behaviour, to one of identifying potential criminals. Essentially, this means that more emphasis is placed on pre-emptive rather than preventive measures to curb/minimise societal issues.    
+
+A third ethical issue pertains to the use and control of data. Given that a vast amount of personal information is needed for the model to accurately predict the life course, it raises the question of who should have access and control over such information. On the one hand, it is easy to argue that individuals should have full control over their own personal information. Yet on the other, it is also rational to argue that such information should be publicly available, so as to allow for predictions that has consequences for broader society -- for instance, if one is likely to engage in acts of violence. In such a scenario, a utilitarian view will maintain that it is the state (but not the individual) which ought to have control over such personal information, since individuals may attempt to conceal data that predicts an unfavourable outcome that poses a risk to society (e.g., of being abusive). Even so, more ethical considerations should arise, especially with regard to the establishing of safeguards to prevent the misuse of personal information. It is crucial for instance, to stipulate strict conditions which allow for such information to be drawn upon, and the extent to which they can be utilised.
+
+# References
